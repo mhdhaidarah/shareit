@@ -10,6 +10,12 @@ $Home2 = Join-Path $env:LOCALAPPDATA 'ShareIT'
 $Folder = (Get-Location).ProviderPath
 
 function Fail($m) { Write-Host "ShareIT: $m" -ForegroundColor Red }
+# a closed window leaves its work folder behind: remove those whose window is gone
+Get-ChildItem $Home2 -Filter 'run-*' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+  $o = Join-Path $_.FullName 'owner'
+  $alive = (Test-Path $o) -and (Get-Process -Id ([int](Get-Content $o)) -ErrorAction SilentlyContinue)
+  if (-not $alive) { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+}
 function Get-Cloudflared {
   New-Item -ItemType Directory -Force -Path $Home2 | Out-Null
   $exe = Join-Path $Home2 'cloudflared.exe'
@@ -90,6 +96,7 @@ if ($Mode -eq 'website') {
   $cfw = Get-Cloudflared
   $work = Join-Path $Home2 ("run-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
   New-Item -ItemType Directory -Force -Path $work | Out-Null
+  [IO.File]::WriteAllText((Join-Path $work 'owner'), "$PID")
   [IO.File]::WriteAllText((Join-Path $work 'empty.yml'), '')
   $log = Join-Path $work 'tunnel.log'
   $w = $work -replace '\\','/'
@@ -128,7 +135,8 @@ if (-not (Test-Path $nginx)) {
   Write-Host 'Installing nginx (first run only)...'
   $zip = Join-Path $Home2 'nginx.zip'
   Invoke-WebRequest "https://nginx.org/download/nginx-$NginxVersion.zip" -OutFile $zip -UseBasicParsing
-  Expand-Archive $zip -DestinationPath $Home2 -Force
+  Add-Type -AssemblyName System.IO.Compression.FileSystem
+  [IO.Compression.ZipFile]::ExtractToDirectory($zip, $Home2)
   Remove-Item $zip
 }
 $cf = Get-Cloudflared
@@ -249,6 +257,7 @@ $page = $page.Replace('__TITLE__', (Enc $name)).Replace('__LOGO__', $logo).Repla
 # ---- run: both programs die with this window (a Windows job object) ----
 $work = Join-Path $Home2 ("run-" + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 foreach ($d in 'logs','temp','temp/client_body_temp') { New-Item -ItemType Directory -Force -Path (Join-Path $work $d) | Out-Null }
+[IO.File]::WriteAllText((Join-Path $work 'owner'), "$PID")
 [IO.File]::WriteAllText((Join-Path $work 'index.html'), $page, (New-Object Text.UTF8Encoding($false)))
 $bytes = New-Object byte[] 16; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
 $token = -join ($bytes | ForEach-Object { $_.ToString('x2') })
